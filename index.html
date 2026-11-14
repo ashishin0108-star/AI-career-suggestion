@@ -1,0 +1,725 @@
+
+# ============================================================
+# AI CAREER SUGGESTION SYSTEM
+# Machine Learning + Gradio + Live Public Link
+# Google Colab - Run in ONE CELL
+# Dataset: Hugging Face Career Recommender
+# ============================================================
+
+import sys, subprocess, os, re, html, warnings
+warnings.filterwarnings("ignore")
+
+# 1. INSTALL LIBRARIES
+subprocess.check_call([
+    sys.executable, "-m", "pip", "install", "-q",
+    "gradio", "pandas", "scikit-learn", "plotly"
+])
+
+import gradio as gr
+import pandas as pd
+import numpy as np
+import plotly.express as px
+
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
+
+# 2. LOAD DATASET USING URL
+DATASET_URL = (
+    "https://huggingface.co/datasets/dyno7/"
+    "career_recommender/resolve/main/career_recommender.csv"
+)
+
+print("Loading Career Dataset...")
+
+df = pd.read_csv(DATASET_URL, encoding="utf-8-sig")
+df.columns = df.columns.str.strip()
+
+# Dataset columns
+COURSE = "What was your course in UG?"
+SPECIAL = "What is your UG specialization? Major Subject (Eg; Mathematics)"
+INTEREST = "What are your interests?"
+SKILLS = "What are your skills ? (Select multiple if necessary)"
+WORKING = "Are you working?"
+JOB = "If yes, then what is/was your first Job title in your current field of work?"
+MARKS = "What was the average CGPA or Percentage obtained in under graduation?"
+
+required = [COURSE, SPECIAL, INTEREST, SKILLS, WORKING, JOB]
+missing = [c for c in required if c not in df.columns]
+
+if missing:
+    raise ValueError(f"Dataset columns missing: {missing}")
+
+def clean_text(x):
+    if pd.isna(x):
+        return ""
+    x = str(x).strip()
+    if x.lower() in ["nan", "none", "no", "na", "n/a"]:
+        return ""
+    return x
+
+# 3. PREPARE DATA
+for col in [COURSE, SPECIAL, INTEREST, SKILLS, WORKING, JOB]:
+    df[col] = df[col].apply(clean_text)
+
+# Use existing job titles as recommendation labels
+profiles = df[
+    (df[JOB] != "") &
+    (~df[JOB].str.lower().isin(["na", "student (unemployed)", "no"])) &
+    (df[WORKING].str.lower().isin(["yes", "true", "1"]))
+].copy()
+
+if len(profiles) < 5:
+    profiles = df[
+        (df[JOB] != "") &
+        (~df[JOB].str.lower().isin(["na", "student (unemployed)", "no"]))
+    ].copy()
+
+profiles["profile_text"] = (
+    profiles[COURSE] + " " +
+    profiles[SPECIAL] + " " +
+    profiles[INTEREST] + " " +
+    profiles[SKILLS]
+).str.lower()
+
+profiles = profiles[
+    profiles["profile_text"].str.strip() != ""
+].reset_index(drop=True)
+
+# 4. TRAIN ML RECOMMENDATION MODEL
+vectorizer = TfidfVectorizer(
+    stop_words="english",
+    ngram_range=(1, 2),
+    sublinear_tf=True,
+    max_features=12000
+)
+
+X = vectorizer.fit_transform(profiles["profile_text"])
+
+print("Model training completed!")
+print("Total Dataset Records:", len(df))
+print("Training Profiles:", len(profiles))
+print("Unique Career Titles:", profiles[JOB].nunique())
+
+# 5. CAREER ROADMAP DATABASE
+roadmaps = {
+    "software": {
+        "skills": ["Python", "Java", "Data Structures", "SQL", "Git"],
+        "courses": ["BCA", "B.Tech CS", "MCA"],
+        "steps": [
+            "Learn programming fundamentals",
+            "Practice Data Structures and Algorithms",
+            "Build 3 real-world projects",
+            "Learn Git and databases",
+            "Create a portfolio and apply for internships"
+        ]
+    },
+    "data": {
+        "skills": ["Python", "SQL", "Pandas", "Statistics", "Power BI"],
+        "courses": ["B.Sc Statistics", "BCA", "B.Tech", "MCA"],
+        "steps": [
+            "Learn Python and Pandas",
+            "Learn SQL and Excel",
+            "Study statistics",
+            "Build data analysis projects",
+            "Learn Power BI or Tableau"
+        ]
+    },
+    "teacher": {
+        "skills": ["Communication", "Subject Knowledge", "Presentation"],
+        "courses": ["Relevant Graduation", "B.Ed", "CTET / TET"],
+        "steps": [
+            "Complete relevant graduation",
+            "Develop subject expertise",
+            "Complete required teaching qualification",
+            "Prepare for CTET / State TET where applicable",
+            "Apply for teaching positions"
+        ]
+    },
+    "finance": {
+        "skills": ["Excel", "Accounting", "Financial Analysis", "Communication"],
+        "courses": ["B.Com", "M.Com", "MBA Finance", "CA / CMA"],
+        "steps": [
+            "Learn accounting fundamentals",
+            "Improve Excel skills",
+            "Study financial statements",
+            "Build practical finance projects",
+            "Consider relevant professional certifications"
+        ]
+    },
+    "marketing": {
+        "skills": ["Communication", "SEO", "Social Media", "Analytics"],
+        "courses": ["BBA", "MBA Marketing", "Digital Marketing"],
+        "steps": [
+            "Learn marketing fundamentals",
+            "Practice social media marketing",
+            "Learn SEO and content creation",
+            "Build a marketing portfolio",
+            "Apply for internships"
+        ]
+    },
+    "engineer": {
+        "skills": ["Mathematics", "Problem Solving", "CAD", "Technical Knowledge"],
+        "courses": ["Diploma", "B.E.", "B.Tech", "M.Tech"],
+        "steps": [
+            "Strengthen mathematics and science",
+            "Complete a relevant engineering qualification",
+            "Learn industry-specific software",
+            "Build practical projects",
+            "Prepare for technical interviews"
+        ]
+    },
+    "design": {
+        "skills": ["Creativity", "Figma", "Design Thinking", "Communication"],
+        "courses": ["B.Des", "Graphic Design", "UI/UX Design"],
+        "steps": [
+            "Learn design fundamentals",
+            "Practice Figma and design tools",
+            "Create sample designs",
+            "Build a portfolio",
+            "Apply for design internships"
+        ]
+    },
+    "default": {
+        "skills": ["Communication", "Problem Solving", "Digital Skills"],
+        "courses": ["Relevant Graduation", "Professional Certification"],
+        "steps": [
+            "Identify your career specialization",
+            "Study the required qualifications",
+            "Develop relevant skills",
+            "Build practical projects",
+            "Gain internship or work experience"
+        ]
+    }
+}
+
+def get_roadmap(job):
+    j = job.lower()
+
+    if any(x in j for x in ["software", "developer", "programmer", "web", "app"]):
+        return roadmaps["software"]
+    if any(x in j for x in ["data", "analytics", "machine learning", "scientist"]):
+        return roadmaps["data"]
+    if any(x in j for x in ["teacher", "professor", "lecturer", "education"]):
+        return roadmaps["teacher"]
+    if any(x in j for x in ["account", "finance", "bank", "auditor"]):
+        return roadmaps["finance"]
+    if any(x in j for x in ["marketing", "sales", "social media"]):
+        return roadmaps["marketing"]
+    if any(x in j for x in ["engineer", "technician"]):
+        return roadmaps["engineer"]
+    if any(x in j for x in ["design", "artist", "creative"]):
+        return roadmaps["design"]
+
+    return roadmaps["default"]
+
+# 6. AI CAREER RECOMMENDATION FUNCTION
+def recommend_career(name, education, specialization,
+                     interests, skills, marks):
+
+    name = clean_text(name) or "Student"
+    specialization = clean_text(specialization)
+    interests = clean_text(interests)
+    skills = clean_text(skills)
+
+    if not specialization and not interests and not skills:
+        return (
+            "<h3>Please enter your specialization, interests or skills.</h3>",
+            pd.DataFrame(columns=["Career", "Match Score"])
+        )
+
+    user_text = (
+        str(education) + " " +
+        specialization + " " +
+        interests + " " +
+        skills
+    ).lower()
+
+    user_vector = vectorizer.transform([user_text])
+    similarities = cosine_similarity(user_vector, X).flatten()
+
+    profiles_copy = profiles.copy()
+    profiles_copy["similarity"] = similarities
+
+    # Group similar job titles
+    career_scores = (
+        profiles_copy.groupby(JOB)["similarity"]
+        .agg(["mean", "max", "count"])
+        .reset_index()
+    )
+
+    career_scores["score"] = (
+        0.65 * career_scores["mean"] +
+        0.35 * career_scores["max"]
+    )
+
+    career_scores = career_scores.sort_values(
+        "score", ascending=False
+    ).head(5)
+
+    if career_scores.empty:
+        return "<h3>No career recommendations found.</h3>", pd.DataFrame()
+
+    # Similarity scores are relative ranking scores,
+    # NOT probabilities of career success.
+    max_score = max(float(career_scores["score"].max()), 0.0001)
+
+    career_scores["Match Score"] = (
+        career_scores["score"] / max_score * 100
+    ).round(1)
+
+    top_job = str(career_scores.iloc[0][JOB])
+    roadmap = get_roadmap(top_job)
+
+    rows = ""
+    for i, (_, r) in enumerate(career_scores.iterrows(), 1):
+        job = html.escape(str(r[JOB]))
+        score = float(r["Match Score"])
+
+        rows += f"""
+        <div class="career-card">
+          <div style="display:flex;justify-content:space-between;gap:10px">
+            <b>#{i} {job}</b>
+            <b>{score}%</b>
+          </div>
+          <div class="progress">
+            <div style="width:{score}%"></div>
+          </div>
+        </div>
+        """
+
+    steps = "".join(
+        f"<li>{html.escape(s)}</li>" for s in roadmap["steps"]
+    )
+
+    skill_tags = "".join(
+        f'<span class="tag">{html.escape(s)}</span>'
+        for s in roadmap["skills"]
+    )
+
+    course_tags = "".join(
+        f'<span class="tag">{html.escape(s)}</span>'
+        for s in roadmap["courses"]
+    )
+
+    report = f"""
+    <div class="result-wrap">
+      <div class="result-header">
+        <div style="font-size:38px">🎯</div>
+        <h2>Career Analysis Report</h2>
+        <p>Welcome, {html.escape(name)}!</p>
+        <h3>Recommended Career: {html.escape(top_job)}</h3>
+      </div>
+
+      <h3>🏆 Top 5 Career Recommendations</h3>
+      {rows}
+
+      <h3>🧭 Your Career Roadmap</h3>
+      <h4>Recommended Courses</h4>
+      {course_tags}
+
+      <h4>Skills to Develop</h4>
+      {skill_tags}
+
+      <h4>Step-by-Step Learning Plan</h4>
+      <ol>{steps}</ol>
+
+      <div class="notice">
+        <b>Important:</b> Match scores represent relative text similarity
+        with existing dataset profiles. They are not admission,
+        employment or career-success probabilities.
+        Please verify course eligibility and career requirements
+        from official sources.
+      </div>
+    </div>
+    """
+
+    result_df = career_scores[[JOB, "Match Score"]].copy()
+    result_df.columns = ["Recommended Career", "Match Score (%)"]
+
+    return report, result_df
+
+# 7. CAREER EXPLORER
+career_categories = {
+    "Technology": [
+        "Software Developer", "Data Analyst",
+        "Data Scientist", "AI / ML Engineer",
+        "Web Developer", "Cybersecurity Analyst"
+    ],
+    "Engineering": [
+        "Mechanical Engineer", "Civil Engineer",
+        "Electrical Engineer", "Electronics Engineer"
+    ],
+    "Business": [
+        "Business Analyst", "Marketing Manager",
+        "HR Manager", "Financial Analyst"
+    ],
+    "Education": [
+        "Teacher", "Lecturer", "Researcher"
+    ],
+    "Creative": [
+        "Graphic Designer", "UI/UX Designer",
+        "Content Writer", "Digital Creator"
+    ],
+    "Government": [
+        "UPSC Civil Services", "SSC Jobs",
+        "Banking Exams", "State Government Jobs"
+    ]
+}
+
+def explore(category):
+    careers = career_categories.get(category, [])
+    cards = "".join(
+        f'<div class="career-card">💼 {html.escape(c)}</div>'
+        for c in careers
+    )
+    return f"<h2>{html.escape(category)} Careers</h2>{cards}"
+
+# 8. PROJECT STATISTICS
+total_records = len(df)
+total_careers = profiles[JOB].nunique()
+total_skills = profiles[SKILLS].nunique()
+
+# 9. CUSTOM CSS
+css = """
+@import url('https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700;800&display=swap');
+
+.gradio-container {
+    font-family: 'Poppins', sans-serif !important;
+    max-width: 1250px !important;
+    margin: auto !important;
+}
+
+body {
+    background: #f2f5fc !important;
+}
+
+.hero {
+    background: linear-gradient(120deg,#101d46,#263f91,#7655c9);
+    padding: 42px 25px;
+    border-radius: 22px;
+    color: white;
+    text-align: center;
+    margin-bottom: 20px;
+}
+
+.hero h1 {font-size: 36px; margin: 10px;}
+.hero p {font-size: 15px; color: #e2e8ff;}
+
+.stat-grid {
+    display: grid;
+    grid-template-columns: repeat(3,1fr);
+    gap: 12px;
+    margin: 20px 0;
+}
+
+.stat {
+    background: white;
+    padding: 22px 10px;
+    border-radius: 15px;
+    text-align: center;
+    border: 1px solid #e4e8f3;
+}
+
+.stat h2 {color: #5148b8; margin: 5px;}
+.stat p {color: #64748b;}
+
+.career-card {
+    background: white;
+    padding: 17px;
+    margin: 12px 0;
+    border: 1px solid #e2e8f0;
+    border-radius: 13px;
+    color: #1e293b;
+}
+
+.progress {
+    height: 9px;
+    background: #e5e7eb;
+    border-radius: 10px;
+    margin-top: 12px;
+    overflow: hidden;
+}
+
+.progress div {
+    height: 100%;
+    background: linear-gradient(90deg,#5965d8,#9b65dc);
+    border-radius: 10px;
+}
+
+.result-wrap {
+    background: #f6f7ff;
+    border-radius: 18px;
+    padding: 22px;
+    color: #26324c;
+}
+
+.result-header {
+    background: linear-gradient(120deg,#172b61,#7655c9);
+    color: white;
+    padding: 25px;
+    text-align: center;
+    border-radius: 15px;
+    margin-bottom: 20px;
+}
+
+.tag {
+    display: inline-block;
+    padding: 8px 13px;
+    background: #e8e9ff;
+    color: #4338a8;
+    border-radius: 20px;
+    margin: 4px;
+    font-size: 12px;
+}
+
+.notice {
+    background: #fff6dc;
+    border-left: 4px solid #e6a52c;
+    padding: 14px;
+    border-radius: 8px;
+    margin-top: 20px;
+    font-size: 13px;
+}
+
+.footer {
+    text-align: center;
+    padding: 20px;
+    color: #64748b;
+}
+
+@media(max-width:600px) {
+    .hero h1 {font-size:25px;}
+    .stat-grid {grid-template-columns:1fr;}
+}
+"""
+
+# 10. GRADIO MULTI-PAGE UI
+with gr.Blocks(
+    theme=gr.themes.Soft(
+        primary_hue="indigo",
+        secondary_hue="purple"
+    ),
+    css=css,
+    title="AI Career Suggestion System"
+) as demo:
+
+    # HOME PAGE
+    with gr.Tab("🏠 Home"):
+
+        gr.HTML(f"""
+        <div class="hero">
+          <div style="font-size:45px">🚀</div>
+          <h1>AI Career Suggestion System</h1>
+          <p>Discover Your Future With Machine Learning</p>
+          <p>Smart Career Guidance | Skill Analysis | Career Roadmap</p>
+        </div>
+
+        <div class="stat-grid">
+          <div class="stat">
+            <h2>{total_records:,}</h2>
+            <p>Dataset Records</p>
+          </div>
+          <div class="stat">
+            <h2>{total_careers:,}</h2>
+            <p>Career Titles</p>
+          </div>
+          <div class="stat">
+            <h2>{total_skills:,}</h2>
+            <p>Skill Profiles</p>
+          </div>
+        </div>
+        """)
+
+        gr.Markdown("""
+        ## Welcome to AI Career Guidance
+
+        Choose a career based on your education, skills and interests.
+
+        ### What can you do here?
+
+        - 🎯 Get personalized career recommendations
+        - 📊 Compare your profile with existing career profiles
+        - 🧭 Get a step-by-step career roadmap
+        - 💡 Discover different career opportunities
+        - 🎓 Explore skills and courses
+
+        **Start with the AI Career Finder tab!**
+        """)
+
+    # CAREER FINDER PAGE
+    with gr.Tab("🎯 AI Career Finder"):
+
+        gr.Markdown("""
+        # Find Your Best Career
+
+        Enter your details below to receive personalized recommendations.
+        """)
+
+        with gr.Row():
+
+            with gr.Column():
+
+                name = gr.Textbox(
+                    label="Student Name",
+                    placeholder="Enter your name"
+                )
+
+                education = gr.Dropdown(
+                    choices=[
+                        "Class 10", "Class 12",
+                        "Diploma", "BA", "B.Sc",
+                        "B.Com", "BCA", "BBA",
+                        "BE", "B.Tech", "B.Pharmacy",
+                        "MBA", "MCA", "M.Sc",
+                        "M.Com", "M.Tech", "Other"
+                    ],
+                    value="BCA",
+                    label="Education / Qualification"
+                )
+
+                specialization = gr.Textbox(
+                    label="Your Subject / Specialization",
+                    placeholder="Example: Computer Science, Commerce, Mathematics"
+                )
+
+                interests = gr.Textbox(
+                    label="Your Interests",
+                    placeholder="Example: Technology, Research, Teaching, Business",
+                    lines=3
+                )
+
+                skills = gr.Textbox(
+                    label="Your Skills",
+                    placeholder="Example: Python, SQL, Communication, Excel",
+                    lines=3
+                )
+
+                marks = gr.Slider(
+                    minimum=0,
+                    maximum=100,
+                    value=75,
+                    step=1,
+                    label="Academic Percentage (Optional)"
+                )
+
+                submit = gr.Button(
+                    "🚀 Generate My Career Report",
+                    variant="primary",
+                    size="lg"
+                )
+
+            with gr.Column():
+                output = gr.HTML(
+                    value="<div class='result-wrap'><h2>✨ Your Career Report Will Appear Here</h2><p>Fill the form and click Generate.</p></div>"
+                )
+
+        career_table = gr.Dataframe(
+            headers=["Recommended Career", "Match Score (%)"],
+            label="Career Recommendation Ranking",
+            interactive=False
+        )
+
+        submit.click(
+            fn=recommend_career,
+            inputs=[
+                name, education, specialization,
+                interests, skills, marks
+            ],
+            outputs=[output, career_table]
+        )
+
+    # CAREER EXPLORER
+    with gr.Tab("🌍 Career Explorer"):
+
+        gr.Markdown("""
+        # Explore Career Opportunities
+
+        Discover career paths across different industries.
+        """)
+
+        category = gr.Dropdown(
+            choices=list(career_categories.keys()),
+            value="Technology",
+            label="Select Career Category"
+        )
+
+        explore_btn = gr.Button(
+            "Explore Careers",
+            variant="primary"
+        )
+
+        explorer_output = gr.HTML()
+
+        explore_btn.click(
+            explore,
+            inputs=category,
+            outputs=explorer_output
+        )
+
+        demo.load(
+            explore,
+            inputs=category,
+            outputs=explorer_output
+        )
+
+    # ABOUT PAGE
+    with gr.Tab("ℹ️ About Project"):
+
+        gr.Markdown(f"""
+        # About This Project
+
+        **AI Career Suggestion System** is a Machine Learning
+        based career recommendation project.
+
+        ### Technologies Used
+
+        - Python
+        - Pandas
+        - NumPy
+        - Scikit-learn
+        - TF-IDF Vectorization
+        - Cosine Similarity
+        - Gradio
+
+        ### Dataset Information
+
+        - Dataset: Hugging Face Career Recommender
+        - Total records loaded: {total_records}
+        - Usable career profiles: {len(profiles)}
+        - Unique job titles: {total_careers}
+
+        ### ML Algorithm
+
+        TF-IDF converts educational backgrounds, interests and skills
+        into numerical vectors. Cosine similarity compares the
+        student's profile with existing profiles and ranks career titles.
+
+        ### Important Limitations
+
+        The dataset mainly contains undergraduate and working-person
+        profiles. It does not provide a validated career-success label.
+        Therefore, this application is a prototype career recommender,
+        not a scientifically validated aptitude test or an employment predictor.
+
+        Dataset source:
+
+        https://huggingface.co/datasets/dyno7/career_recommender
+
+        """)
+
+    gr.HTML("""
+    <div class="footer">
+      <b>AI Career Suggestion System</b><br>
+      Machine Learning Project | Powered by Python & Gradio<br>
+      Designed for Student Career Guidance
+    </div>
+    """)
+
+# 11. LAUNCH LIVE PROJECT
+print("\nLaunching your AI Career Suggestion System...")
+
+demo.launch(
+    share=True,
+    debug=False,
+    show_error=True
+)
